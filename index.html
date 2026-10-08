@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF 文字入れ</title>
+<style>
+  @font-face {
+    font-family: "FillGothic";
+    src: url("fonts/BIZUDGothic-Regular.ttf") format("truetype");
+  }
+  :root {
+    --bg: #e9ebee;
+    --panel: #ffffff;
+    --line: #c9ced6;
+    --accent: #1a6fe0;
+    --text: #222;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "游ゴシック", "Yu Gothic", "メイリオ", Meiryo, "BIZ UDGothic", sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+  }
+  #toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+  }
+  #toolbar label { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+  #toolbar select, #toolbar button { font: inherit; font-size: 13px; padding: 4px 8px; }
+  #toolbar button.primary { background: var(--accent); color: #fff; border: 1px solid var(--accent); border-radius: 4px; cursor: pointer; }
+  #toolbar button.primary:disabled { opacity: .5; cursor: default; }
+  #fileName { font-size: 13px; color: #555; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+  #help { font-size: 12px; color: #666; margin-left: auto; }
+  kbd { border: 1px solid #bbb; border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; font-size: 11px; background: #fafafa; }
+
+  #main { flex: 1; display: flex; min-height: 0; }
+  #viewer { flex: 1; overflow: auto; padding: 20px; }
+  #pages { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  #drop {
+    margin: 60px auto; max-width: 520px; padding: 48px 24px; text-align: center;
+    border: 2px dashed #9aa3af; border-radius: 10px; color: #555; background: #f7f8fa;
+  }
+  #drop.over { border-color: var(--accent); background: #eef4ff; }
+
+  .page {
+    position: relative; background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+    cursor: text;
+  }
+  .page canvas { display: block; }
+  .page .layer { position: absolute; inset: 0; }
+
+  .tbox {
+    position: absolute;
+    font-family: "FillGothic", sans-serif;
+    color: #000;
+    line-height: 1.3;
+    white-space: pre;
+    padding: 0; margin: 0;
+    outline: 1px dashed rgba(26,111,224,.45);
+    outline-offset: 1px;
+    min-width: 0.5em;
+    cursor: text;
+  }
+  .tbox:focus { outline: 1px solid var(--accent); }
+  .tbox.selected { outline: 2px solid var(--accent); }
+  .tbox .grip { display: none; }
+  .grip {
+    position: absolute; left: -16px; top: -2px;
+    width: 14px; height: 14px; border-radius: 3px;
+    background: var(--accent); cursor: move;
+    font: 10px/14px sans-serif; color: #fff; text-align: center;
+    user-select: none;
+  }
+
+  #logPanel {
+    width: 320px; display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--line);
+  }
+  #logPanel header { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  #logPanel header span { flex: 1; font-weight: bold; }
+  #logPanel header button { font: inherit; font-size: 12px; padding: 2px 6px; }
+  #log {
+    flex: 1; overflow: auto; margin: 0; padding: 6px 8px;
+    font: 11px/1.45 Consolas, "BIZ UDGothic", "メイリオ", monospace;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  #log .err { color: #c00; }
+  body.hide-log #logPanel { display: none; }
+
+  /* ---- タッチ端末 ---- */
+  .touch-only { display: none; }
+  body.touch .touch-only { display: inline-block; }
+  #addBtn.on { background: #e8590c; border-color: #e8590c; }
+  body.touch .page { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  body.touch .tbox { -webkit-user-select: text; user-select: text; }
+  body.touch .tbox.selected { touch-action: none; }
+  body.touch.adding .page { outline: 3px solid #e8590c; }
+  #boxMenu {
+    position: absolute; z-index: 5; display: none;
+    gap: 2px; padding: 3px;
+    background: #333; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    white-space: nowrap;
+  }
+  #boxMenu.show { display: flex; }
+  #boxMenu button {
+    font: inherit; font-size: 14px; color: #fff; background: transparent;
+    border: 0; border-radius: 6px; min-width: 44px; height: 40px; padding: 0 8px;
+  }
+  #boxMenu button:active { background: #555; }
+  #boxMenu button.del { color: #ff8a80; }
+
+  @media (max-width: 700px) {
+    #toolbar { gap: 6px; padding: 6px 8px; }
+    #toolbar select, #toolbar button { min-height: 40px; font-size: 14px; }
+    #help, .sep, #fileName, #deleteBtn, #toggleLog { display: none; }
+    #viewer { padding: 8px; }
+    #pages { gap: 8px; }
+    #logPanel { position: fixed; left: 0; right: 0; bottom: 0; width: auto; height: 40vh; z-index: 20; }
+  }
+</style>
+</head>
+<body class="hide-log">
+<div id="toolbar">
+  <button id="openBtn" class="primary">PDFを開く</button>
+  <button id="addBtn" class="primary touch-only">＋テキスト</button>
+  <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
+  <span id="fileName"></span>
+  <div class="sep"></div>
+  <label>文字サイズ
+    <select id="fontSize"></select> pt
+  </label>
+  <label>表示
+    <select id="zoom">
+      <option value="fit">幅に合わせる</option>
+      <option value="0.5">50%</option>
+      <option value="0.75">75%</option>
+      <option value="1" selected>100%</option>
+      <option value="1.25">125%</option>
+      <option value="1.5">150%</option>
+      <option value="2">200%</option>
+    </select>
+  </label>
+  <button id="deleteBtn">選択を削除</button>
+  <div class="sep"></div>
+  <button id="saveBtn" class="primary" disabled>PDFを保存</button>
+  <button id="toggleLog">ログ</button>
+  <div id="help">
+    ページをクリックで追加 ／ <kbd>Ctrl</kbd>+<kbd>D</kbd> 複製 ／
+    <kbd>Esc</kbd> 選択 → <kbd>←↑→↓</kbd> 移動・<kbd>Del</kbd> 削除 ／ ■ をドラッグで移動 ／ <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存
+  </div>
+</div>
+
+<div id="main">
+  <div id="viewer">
+    <div id="drop">ここに PDF をドロップ<br>または「PDFを開く」</div>
+    <div id="pages"></div>
+    <div id="boxMenu">
+      <button data-act="smaller">A−</button>
+      <button data-act="larger">A＋</button>
+      <button data-act="dup">複製</button>
+      <button data-act="del" class="del">削除</button>
+      <button data-act="done">完了</button>
+    </div>
+  </div>
+  <aside id="logPanel">
+    <header><span>イベントログ</span><button id="copyLog">コピー</button><button id="clearLog">クリア</button></header>
+    <pre id="log"></pre>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script type="module">
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs";
+
+const FONT_URL = "fonts/BIZUDGothic-Regular.ttf";
+const FONT_FAMILY = "FillGothic";
+const LINE_HEIGHT = 1.3;          // .tbox の line-height と一致させる
+const CSS_UNITS = 96 / 72;        // 1pt → px
+const SIZES = [6, 7, 8, 9, 10, 10.5, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
+
+const $ = (id) => document.getElementById(id);
+const pagesEl = $("pages");
+const fontSizeSel = $("fontSize");
+const zoomSel = $("zoom");
+
+// ---------- ログ ----------
+function log(msg, isErr = false) {
+  const t = new Date().toTimeString().slice(0, 8);
+  const line = document.createElement("div");
+  line.textContent = `[${t}] ${msg}`;
+  if (isErr) line.className = "err";
+  $("log").appendChild(line);
+  $("log").scrollTop = $("log").scrollHeight;
+  (isErr ? console.error : console.log)(msg);
+}
+$("copyLog").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("log").innerText);
+    log("ログをクリップボードにコピーしました");
+  } catch (e) { log("コピー失敗: " + e, true); }
+};
+$("clearLog").onclick = () => { $("log").textContent = ""; };
+$("toggleLog").onclick = () => document.body.classList.toggle("hide-log");
+window.addEventListener("error", (e) => log("ERROR: " + e.message, true));
+window.addEventListener("unhandledrejection", (e) => log("ERROR: " + (e.reason?.message || e.reason), true));
+
+// ---------- 状態 ----------
+let pdfDoc = null;          // pdf.js document
+let origBytes = null;       // 元PDF
+let origName = "document.pdf";
+let pageInfos = [];         // { pdfPage, base: viewport(scale=1), el, layer }
+let boxes = [];             // { id, page, x, y, size, el }  x,y: scale=1 のビューポート座標(pt)
+let selected = null;
+let nextId = 1;
+let baselineRatio = 1.0;    // (行の上端→ベースライン) / fontSize
+let fontBytesPromise = null;
+let fitScale = 1;           // 「幅に合わせる」時の scale
+let addMode = false;        // タッチ端末の「＋テキスト」モード
+let lastPointerType = "mouse";
+const touchUI = matchMedia("(pointer: coarse)").matches;
+if (touchUI) document.body.classList.add("touch");
+// 直前の入力がマウスかタッチかを記録（タッチ由来の互換 mousedown を無視するため）
+document.addEventListener("pointerdown", (e) => { lastPointerType = e.pointerType; }, true);
+const boxMenu = $("boxMenu");
+
+for (const s of SIZES) {
+  const o = document.createElement("option");
+  o.value = s; o.textContent = s;
+  if (s === 12) o.selected = true;
+  fontSizeSel.appendChild(o);
+}
+
+const scale = () => zoomSel.value === "fit" ? fitScale : parseFloat(zoomSel.value) * CSS_UNITS;
+// 狭い画面では最初から「幅に合わせる」
+if (matchMedia("(max-width: 700px)").matches) zoomSel.value = "fit";
+
+// ブラウザ上の実際のベースライン位置を測る（PDF出力位置を画面と一致させるため）
+async function measureBaseline() {
+  await document.fonts.load(`100px ${FONT_FAMILY}`, "あA");
+  const wrap = document.createElement("div");
+  wrap.style.cssText = `position:absolute;left:-9999px;top:0;font-family:${FONT_FAMILY};font-size:100px;line-height:${LINE_HEIGHT};white-space:pre`;
+  wrap.innerHTML = 'あA<span style="display:inline-block;width:1px;height:0;vertical-align:baseline"></span>';
+  document.body.appendChild(wrap);
+  const marker = wrap.querySelector("span");
+  baselineRatio = (marker.getBoundingClientRect().top - wrap.getBoundingClientRect().top) / 100;
+  wrap.remove();
+  log(`フォント読込完了 baselineRatio=${baselineRatio.toFixed(4)}`);
+}
+measureBaseline();
+
+// ---------- 読み込み ----------
+$("openBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = (e) => { if (e.target.files[0]) openFile(e.target.files[0]); e.target.value = ""; };
+
+const viewer = $("viewer");
+viewer.addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("over"); });
+viewer.addEventListener("dragleave", () => $("drop").classList.remove("over"));
+viewer.addEventListener("drop", (e) => {
+  e.preventDefault();
+  $("drop").classList.remove("over");
+  const f = [...e.dataTransfer.files].find((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+  if (f) openFile(f); else log("PDFファイルではありません", true);
+});
+
+async function openFile(file) {
+  if (boxes.length && !confirm("追加したテキストは破棄されます。新しいPDFを開きますか？")) return;
+  log(`読み込み: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+  origName = file.name;
+  origBytes = new Uint8Array(await file.arrayBuffer());
+  try {
+    pdfDoc = await pdfjsLib.getDocument({ data: origBytes.slice() }).promise;
+  } catch (e) {
+    log("PDFを開けません: " + e.message, true);
+    return;
+  }
+  boxes = []; selected = null;
+  setAddMode(false); positionMenu();
+  pageInfos = [];
+  pagesEl.textContent = "";
+  $("drop").style.display = "none";
+  $("fileName").textContent = file.name;
+  $("saveBtn").disabled = false;
+  for (let i = 1; i <= pdfDoc.numPages; i++) {
+    const pdfPage = await pdfDoc.getPage(i);
+    const base = pdfPage.getViewport({ scale: 1 });
+    const el = document.createElement("div");
+    el.className = "page";
+    el.dataset.page = i - 1;
+    const canvas = document.createElement("canvas");
+    const layer = document.createElement("div");
+    layer.className = "layer";
+    el.append(canvas, layer);
+    pagesEl.appendChild(el);
+    layer.addEventListener("mousedown", onLayerMouseDown);
+    layer.addEventListener("click", onLayerTap);
+    pageInfos.push({ pdfPage, base, el, canvas, layer, renderTask: null });
+  }
+  log(`ページ数: ${pdfDoc.numPages}`);
+  await renderAll();
+}
+
+async function renderAll() {
+  if (pageInfos.length) {
+    const pad = parseFloat(getComputedStyle(viewer).paddingLeft) * 2;
+    const maxW = Math.max(...pageInfos.map((p) => p.base.width));
+    fitScale = Math.max(0.1, (viewer.clientWidth - pad) / maxW);
+  }
+  const s = scale();
+  const dpr = window.devicePixelRatio || 1;
+  for (const info of pageInfos) {
+    const vp = info.pdfPage.getViewport({ scale: s });
+    info.el.style.width = vp.width + "px";
+    info.el.style.height = vp.height + "px";
+    info.canvas.width = Math.floor(vp.width * dpr);
+    info.canvas.height = Math.floor(vp.height * dpr);
+    info.canvas.style.width = vp.width + "px";
+    info.canvas.style.height = vp.height + "px";
+    info.renderTask?.cancel();
+    info.renderTask = info.pdfPage.render({
+      canvasContext: info.canvas.getContext("2d"),
+      viewport: vp,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+    });
+    info.renderTask.promise.catch((e) => { if (e?.name !== "RenderingCancelledException") log("描画エラー: " + e.message, true); });
+  }
+  boxes.forEach(layoutBox);
+  if (selected) { positionGrip(selected); positionMenu(); }
+}
+
+zoomSel.onchange = () => {
+  log(`表示倍率: ${zoomSel.value === "fit" ? "幅に合わせる" : zoomSel.value * 100 + "%"}`);
+  renderAll();
+};
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  if (zoomSel.value !== "fit") return;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(renderAll, 200);
+});
+
+// ---------- テキストボックス ----------
+function layoutBox(b) {
+  const s = scale();
+  b.el.style.left = b.x * s + "px";
+  b.el.style.top = b.y * s + "px";
+  b.el.style.fontSize = b.size * s + "px";
+}
+
+function getText(b) {
+  return b.el.innerText.replace(/ /g, " ").replace(/\n+$/, "");
+}
+
+function createBox({ page, x, y, size, text = "" }) {
+  const b = { id: nextId++, page, x, y, size };
+  const el = document.createElement("div");
+  el.className = "tbox";
+  // タッチ端末では編集中だけ編集可能にする（タップ＝選択、選択中タップ＝編集）
+  el.contentEditable = touchUI ? "false" : "plaintext-only";
+  el.spellcheck = false;
+  el.textContent = text;
+  el.dataset.id = b.id;
+  b.el = el;
+
+  const grip = document.createElement("div");
+  grip.className = "grip";
+  grip.textContent = "■";
+  grip.title = "ドラッグで移動";
+  grip.contentEditable = "false";
+  // grip は編集テキストに混ざらないよう、ボックスの外（同じレイヤー）に置いて追従させる
+  b.grip = grip;
+  grip.style.display = "none";
+
+  el.addEventListener("focus", () => { el.classList.remove("selected"); select(b); });
+  el.addEventListener("blur", (e) => {
+    const to = e.relatedTarget;
+    if (to && $("toolbar").contains(to)) return;          // ツールバー操作中は残す
+    if (!getText(b) && boxes.includes(b)) { removeBox(b, "空のため"); return; }
+    if (touchUI) {
+      el.contentEditable = "false";
+      if (selected === b) el.classList.add("selected");
+    }
+  });
+  el.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    if (e.altKey && lastPointerType === "mouse") { e.preventDefault(); startDrag(b, e); }
+  });
+  grip.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); startDrag(b, e); });
+  // タッチ: 選択中のボックスはドラッグで移動、動かさずに離したら編集開始
+  el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" || !touchUI || document.activeElement === el) return;
+    // 編集開始は click で行う（iOS はキーボード表示にユーザー操作中の focus が必要）
+    if (selected === b) { e.preventDefault(); startDrag(b, e, () => { b.editOnClick = true; }); }
+  });
+  // タッチ: 未選択ならタップで選択、選択中ならタップで編集
+  el.addEventListener("click", () => {
+    if (lastPointerType === "mouse" || !touchUI) return;
+    if (b.editOnClick) { b.editOnClick = false; enterEdit(b); return; }
+    if (selected === b) return;
+    const act = document.activeElement;
+    if (act?.classList.contains("tbox") && act !== el) act.blur();
+    select(b);
+    el.classList.add("selected");
+  });
+
+  pageInfos[page].layer.append(el, grip);
+  boxes.push(b);
+  layoutBox(b);
+  positionGrip(b);
+  return b;
+}
+
+function positionGrip(b) {
+  b.grip.style.left = (b.el.offsetLeft - 16) + "px";
+  b.grip.style.top = (b.el.offsetTop - 2) + "px";
+}
+
+function select(b) {
+  if (selected && selected !== b) {
+    selected.el.classList.remove("selected");
+    selected.grip.style.display = "none";
+  }
+  selected = b;
+  if (b) {
+    if (!touchUI) b.grip.style.display = "block";
+    positionGrip(b);
+    // フォントサイズ表示を同期
+    fontSizeSel.value = String(b.size);
+  }
+  positionMenu();
+}
+
+function deselect() {
+  if (!selected) return;
+  const b = selected;
+  selected = null;
+  b.el.classList.remove("selected");
+  b.grip.style.display = "none";
+  if (document.activeElement === b.el) b.el.blur();
+  positionMenu();
+}
+
+function removeBox(b, reason = "") {
+  b.el.remove(); b.grip.remove();
+  boxes = boxes.filter((x) => x !== b);
+  if (selected === b) { selected = null; positionMenu(); }
+  log(`削除 #${b.id}${reason ? "（" + reason + "）" : ""}`);
+}
+
+function focusEnd(el, selectAll = false) {
+  el.focus();
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  if (!selectAll) r.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges(); sel.addRange(r);
+}
+
+function enterEdit(b, selectAll = false) {
+  if (touchUI) b.el.contentEditable = "plaintext-only";
+  b.el.classList.remove("selected");
+  focusEnd(b.el, selectAll);
+}
+
+// 選択中ボックスの上に操作メニュー（タッチ端末のみ）
+function positionMenu() {
+  if (!touchUI || !selected) { boxMenu.classList.remove("show"); return; }
+  const b = selected;
+  const layer = b.el.parentElement;
+  if (boxMenu.parentElement !== layer) layer.appendChild(boxMenu);
+  boxMenu.classList.add("show");
+  const mh = boxMenu.offsetHeight, mw = boxMenu.offsetWidth;
+  let top = b.el.offsetTop - mh - 8;
+  if (top < 0) top = b.el.offsetTop + b.el.offsetHeight + 8;
+  const left = Math.min(Math.max(0, b.el.offsetLeft), Math.max(0, layer.clientWidth - mw));
+  boxMenu.style.top = top + "px";
+  boxMenu.style.left = left + "px";
+}
+
+function setSize(b, size) {
+  b.size = size;
+  fontSizeSel.value = String(size);
+  layoutBox(b); positionGrip(b); positionMenu();
+  log(`文字サイズ #${b.id} → ${size}pt`);
+}
+
+// メニューのボタンを押してもフォーカス（キーボード）を奪わない
+boxMenu.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); });
+boxMenu.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+boxMenu.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const act = e.target.closest("button")?.dataset.act;
+  const b = selected;
+  if (!act || !b) return;
+  const i = SIZES.indexOf(b.size);
+  if (act === "smaller" && i > 0) setSize(b, SIZES[i - 1]);
+  else if (act === "larger" && i < SIZES.length - 1) setSize(b, SIZES[i + 1]);
+  else if (act === "dup") duplicate(b);
+  else if (act === "del") removeBox(b);
+  else if (act === "done") {
+    if (document.activeElement === b.el) b.el.blur();   // blur で空なら削除される
+    if (boxes.includes(b)) { b.el.classList.add("selected"); positionMenu(); }
+  }
+});
+
+// タッチ: ページ上のタップ。追加モードなら追加、それ以外は選択解除
+function onLayerTap(e) {
+  if (lastPointerType === "mouse" || e.target !== e.currentTarget) return;
+  if (!addMode) { deselect(); return; }
+  const pageIdx = +e.currentTarget.parentElement.dataset.page;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const s = scale();
+  const size = parseFloat(fontSizeSel.value);
+  const x = (e.clientX - rect.left) / s;
+  const y = (e.clientY - rect.top) / s - (size * LINE_HEIGHT) / 2;
+  setAddMode(false);
+  const b = createBox({ page: pageIdx, x, y, size });
+  log(`追加 #${b.id} p${pageIdx + 1} (${x.toFixed(1)}, ${y.toFixed(1)}) ${size}pt`);
+  enterEdit(b);
+}
+
+function setAddMode(on) {
+  addMode = on;
+  $("addBtn").classList.toggle("on", on);
+  $("addBtn").textContent = on ? "置く場所をタップ" : "＋テキスト";
+  document.body.classList.toggle("adding", on);
+}
+$("addBtn").onclick = () => { if (pdfDoc) { deselect(); setAddMode(!addMode); } };
+
+function onLayerMouseDown(e) {
+  if (lastPointerType !== "mouse") return;
+  if (e.button !== 0 || e.target !== e.currentTarget) return;
+  e.preventDefault();
+  const pageIdx = +e.currentTarget.parentElement.dataset.page;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const s = scale();
+  const size = parseFloat(fontSizeSel.value);
+  // クリック位置が1行目の縦中央になるように
+  const x = (e.clientX - rect.left) / s;
+  const y = (e.clientY - rect.top) / s - (size * LINE_HEIGHT) / 2;
+  if (document.activeElement?.classList.contains("tbox")) document.activeElement.blur();
+  const b = createBox({ page: pageIdx, x, y, size });
+  log(`追加 #${b.id} p${pageIdx + 1} (${x.toFixed(1)}, ${y.toFixed(1)}) ${size}pt`);
+  focusEnd(b.el);
+}
+
+function duplicate(b) {
+  const text = getText(b);
+  if (!text) { log("空のボックスは複製できません"); return; }
+  // 元ボックスのすぐ下に置く
+  const y = b.y + b.el.getBoundingClientRect().height / scale();
+  const nb = createBox({ page: b.page, x: b.x, y, size: b.size, text });
+  log(`複製 #${b.id} → #${nb.id}`);
+  enterEdit(nb, true);
+}
+
+// ドラッグ移動
+// onTap: 動かさずに離したときの処理（タッチで編集開始に使う）
+function startDrag(b, e, onTap = null) {
+  const s = scale();
+  const sx = e.clientX, sy = e.clientY, ox = b.x, oy = b.y;
+  let moved = false;
+  select(b);
+  b.el.classList.add("selected");
+  const move = (ev) => {
+    if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+    moved = true;
+    b.x = ox + (ev.clientX - sx) / s;
+    b.y = oy + (ev.clientY - sy) / s;
+    layoutBox(b); positionGrip(b); positionMenu();
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    if (moved) log(`移動 #${b.id} → (${b.x.toFixed(1)}, ${b.y.toFixed(1)})`);
+    else onTap?.();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+
+// 文字サイズ変更
+fontSizeSel.onchange = () => {
+  const size = parseFloat(fontSizeSel.value);
+  if (selected) {
+    setSize(selected, size);
+    if (!touchUI) focusEnd(selected.el);
+  } else {
+    log(`文字サイズ（新規用） → ${size}pt`);
+  }
+};
+
+$("deleteBtn").onclick = () => { if (selected) removeBox(selected); };
+
+// ---------- キーボード ----------
+document.addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  const editing = document.activeElement?.classList.contains("tbox");
+
+  if (mod && e.key.toLowerCase() === "s") {
+    e.preventDefault(); savePdf(); return;
+  }
+  if (mod && !e.shiftKey && e.key.toLowerCase() === "d") {
+    e.preventDefault();
+    if (selected) duplicate(selected);
+    return;
+  }
+  if (!selected) return;
+
+  if (editing && e.key === "Escape") {
+    e.preventDefault();
+    const b = selected;
+    document.activeElement.blur();
+    if (boxes.includes(b)) { select(b); b.el.classList.add("selected"); }
+    return;
+  }
+  if (!editing) {
+    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeBox(selected); return; }
+    if (e.key === "Enter") { e.preventDefault(); focusEnd(selected.el); return; }
+    if (e.key === "Escape") { deselect(); return; }
+    const step = e.shiftKey ? 10 : 1;
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (d) {
+      e.preventDefault();
+      selected.x += d[0]; selected.y += d[1];
+      layoutBox(selected); positionGrip(selected);
+    }
+  }
+});
+
+// 入力でボックスの幅が変わったら grip 位置を追従（左上なので基本不変だが念のため）
+document.addEventListener("input", (e) => {
+  if (e.target.classList?.contains("tbox") && selected) { positionGrip(selected); positionMenu(); }
+});
+
+// 余白クリックで選択解除
+viewer.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".page")) { document.activeElement?.blur?.(); deselect(); setAddMode(false); }
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (boxes.length) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// ---------- 保存 ----------
+let hbPromise = null;
+async function subsetFont(fontBuffer, text) {
+  hbPromise ??= fetch("lib/hb-subset.wasm")
+    .then((r) => { if (!r.ok) throw new Error(`wasm取得失敗 ${r.status}`); return r.arrayBuffer(); })
+    .then((buf) => WebAssembly.instantiate(buf))
+    .then((m) => m.instance.exports);
+  const hb = await hbPromise;
+  const src = new Uint8Array(fontBuffer);
+  const ptr = hb.malloc(src.byteLength);
+  new Uint8Array(hb.memory.buffer).set(src, ptr);
+  const blob = hb.hb_blob_create(ptr, src.byteLength, 2 /* writable */, 0, 0);
+  const face = hb.hb_face_create(blob, 0);
+  hb.hb_blob_destroy(blob);
+  const input = hb.hb_subset_input_create_or_fail();
+  const uset = hb.hb_subset_input_unicode_set(input);
+  for (const ch of new Set(text + " ")) hb.hb_set_add(uset, ch.codePointAt(0));
+  const sub = hb.hb_subset_or_fail(face, input);
+  hb.hb_subset_input_destroy(input);
+  if (!sub) { hb.hb_face_destroy(face); hb.free(ptr); throw new Error("hb_subset_or_fail"); }
+  const res = hb.hb_face_reference_blob(sub);
+  const off = hb.hb_blob_get_data(res, 0);
+  const len = hb.hb_blob_get_length(res);
+  const out = new Uint8Array(hb.memory.buffer, off, len).slice();   // メモリ拡張後の buffer から読む
+  hb.hb_blob_destroy(res);
+  hb.hb_face_destroy(sub);
+  hb.hb_face_destroy(face);
+  hb.free(ptr);
+  if (!len) throw new Error("サブセット結果が空");
+  return out;
+}
+
+async function savePdf() {
+  if (!origBytes) return;
+  // 空ボックスを除去
+  boxes.filter((b) => !getText(b)).forEach((b) => removeBox(b, "空のため"));
+  const btn = $("saveBtn");
+  btn.disabled = true;
+  try {
+    const { PDFDocument, rgb, degrees } = PDFLib;
+    log(`保存開始: テキスト ${boxes.length} 件`);
+    fontBytesPromise ??= fetch(FONT_URL).then((r) => {
+      if (!r.ok) throw new Error(`フォント取得失敗 ${r.status}`);
+      return r.arrayBuffer();
+    });
+    const fontBytes = await fontBytesPromise;
+    // pdf-lib の subset:true は CJK で文字が欠けるため、harfbuzz で使用文字だけに絞ってから埋め込む
+    const usedText = boxes.map(getText).join("");
+    let embedBytes = fontBytes;
+    try {
+      embedBytes = await subsetFont(fontBytes, usedText);
+      log(`フォントをサブセット化: ${(fontBytes.byteLength / 1024).toFixed(0)} KB → ${(embedBytes.byteLength / 1024).toFixed(0)} KB`);
+    } catch (e) {
+      log("サブセット化失敗のためフォント全体を埋め込みます: " + e.message, true);
+    }
+    const doc = await PDFDocument.load(origBytes, { ignoreEncryption: true });
+    doc.registerFontkit(fontkit);
+    const font = await doc.embedFont(embedBytes, { subset: false });
+    const pages = doc.getPages();
+
+    for (const b of boxes) {
+      const vp = pageInfos[b.page].base;
+      const page = pages[b.page];
+      const lines = getText(b).split("\n");
+      lines.forEach((line, i) => {
+        if (!line) return;
+        const sy = b.y + (i * LINE_HEIGHT + baselineRatio) * b.size;
+        const [px, py] = vp.convertToPdfPoint(b.x, sy);
+        const [qx, qy] = vp.convertToPdfPoint(b.x + 1, sy);
+        const angle = Math.atan2(qy - py, qx - px) * 180 / Math.PI;
+        page.drawText(line, {
+          x: px, y: py, size: b.size, font,
+          color: rgb(0, 0, 0),
+          rotate: degrees(angle),
+        });
+      });
+    }
+    const out = await doc.save();
+    const blob = new Blob([out], { type: "application/pdf" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = origName.replace(/\.pdf$/i, "") + "_記入済.pdf";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    log(`保存完了: ${a.download} (${(out.length / 1024).toFixed(1)} KB)`);
+  } catch (e) {
+    log("保存エラー: " + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("saveBtn").onclick = savePdf;
+
+log("準備完了。PDFを開いてください");
+</script>
+</body>
+</html>
