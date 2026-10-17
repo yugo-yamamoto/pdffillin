@@ -719,6 +719,43 @@ async function subsetFont(fontBuffer, text) {
   return out;
 }
 
+// 暗号化PDFは空の閲覧パスワードで復号して読み込む（保存結果は暗号化なしになる）。
+// 旧版で保存したPDFは、暗号化されていないのに古い xref ストリーム内の /Encrypt が残っていて
+// "NEEDS PASSWORD" になる。PDF.js はパスワードなしで開けている＝本当の暗号化ではないので、復号せずに読み込む。
+async function loadForEdit(bytes) {
+  const { PDFDocument } = PDFLib;
+  try {
+    return await PDFDocument.load(bytes, { password: "", ignoreEncryption: true });
+  } catch (e) {
+    if (!/NEEDS PASSWORD/.test(e.message)) throw e;
+    log("暗号化の残骸があるPDFのため、暗号化なしとして読み込みます");
+    return await PDFDocument.load(bytes, { ignoreEncryption: true });
+  }
+}
+
+// 元PDFの暗号化辞書と古い xref ストリームを消す。残すと保存したPDFを再度開いたときに暗号化扱いされる
+function removeEncryptionLeftovers(doc) {
+  const { PDFName, PDFDict, PDFInvalidObject } = PDFLib;
+  const ctx = doc.context;
+  const refs = [];
+  if (ctx.trailerInfo.Encrypt) refs.push(ctx.trailerInfo.Encrypt);
+  delete ctx.trailerInfo.Encrypt;
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    // 復号時、暗号化されていない xref ストリームは解析できず生バイトのまま残る
+    if (obj instanceof PDFInvalidObject) {
+      const head = new TextDecoder("latin1").decode(obj.data.subarray(0, 400));
+      if (/\/Type\s*\/XRef/.test(head)) refs.push(ref);
+      continue;
+    }
+    const dict = obj instanceof PDFDict ? obj : obj.dict;
+    if (!(dict instanceof PDFDict)) continue;
+    if (dict.get(PDFName.of("Type")) === PDFName.of("XRef")) refs.push(ref);
+    else if (dict.get(PDFName.of("Filter")) === PDFName.of("Standard") && dict.has(PDFName.of("O")) && dict.has(PDFName.of("U"))) refs.push(ref);
+  }
+  for (const r of refs) if (r?.objectNumber !== undefined) ctx.delete(r);
+  return refs.length;
+}
+
 async function savePdf() {
   if (!origBytes) return;
   // 空ボックスを除去
@@ -748,9 +785,9 @@ async function savePdf() {
     }));
     if (missing.size) log(`フォントに無いため保存できない文字: ${[...missing].join(" ")}`, true);
 
-    // 暗号化PDFは空の閲覧パスワードで復号して読み込む（保存結果は暗号化なしになる）
-    const doc = await PDFDocument.load(origBytes, { password: "", ignoreEncryption: true });
-    if (doc.isEncrypted) log("暗号化PDFのため復号できない可能性があります", true);
+    const doc = await loadForEdit(origBytes);
+    const removed = removeEncryptionLeftovers(doc);
+    if (removed) log(`暗号化の残骸を削除: ${removed} 件`);
     doc.registerFontkit(fontkit);
     // pdf-lib の subset:true は CJK で文字が欠けるため、harfbuzz で使用文字だけに絞ってから埋め込む
     const embedded = [];
