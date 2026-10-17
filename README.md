@@ -14,6 +14,7 @@ PDF はブラウザの中だけで処理され、サーバーには送信され�
 - テキストを書き込んだ PDF を保存する（`元の名前_記入済.pdf`）
 
 フォントはゴシック体（BIZ UDゴシック）、色は黒 100% のみです。
+BIZ UDゴシックに無い記号（✔ ☑ ☒ ☐ ✖ ★ など）は、記号用フォント Noto Sans Symbols 2 で書き込みます。
 
 編集制限（暗号化）付きの PDF も、開くときにパスワードが不要なものであれば書き込めます。保存した PDF は暗号化なしになります。
 
@@ -55,6 +56,7 @@ uv run --no-project python -m http.server 8000
 |---|---|
 | `index.html` | アプリ本体（HTML / CSS / JS） |
 | `fonts/BIZUDGothic-Regular.ttf` | 表示と PDF 埋め込み用フォント |
+| `fonts/NotoSansSymbols2-Regular.ttf` | BIZ UDゴシックに無い記号用の予備フォント |
 | `lib/hb-subset.wasm` | 保存時に、使った文字だけをフォントから切り出す（harfbuzz） |
 
 使用ライブラリ（CDN から読み込み）:
@@ -66,4 +68,5 @@ uv run --no-project python -m http.server 8000
 ## ライセンス
 
 - BIZ UDゴシック: SIL Open Font License 1.1（`fonts/OFL.txt`）
+- Noto Sans Symbols 2: SIL Open Font License 1.1（`fonts/OFL-NotoSansSymbols2.txt`）
 - harfbuzz: MIT License
