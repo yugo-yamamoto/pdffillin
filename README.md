@@ -15,6 +15,8 @@ PDF はブラウザの中だけで処理され、サーバーには送信され�
 
 フォントはゴシック体（BIZ UDゴシック）、色は黒 100% のみです。
 
+編集制限（暗号化）付きの PDF も、開くときにパスワードが不要なものであれば書き込めます。保存した PDF は暗号化なしになります。
+
 ## 使い方
 
 ### PC
@@ -58,7 +60,7 @@ uv run --no-project python -m http.server 8000
 使用ライブラリ（CDN から読み込み）:
 
 - [PDF.js](https://mozilla.github.io/pdf.js/) 4.4.168 — PDF の表示
-- [pdf-lib](https://pdf-lib.js.org/) 1.17.1 + @pdf-lib/fontkit 1.1.1 — PDF への書き込み
+- [@cantoo/pdf-lib](https://github.com/cantoo-scribe/pdf-lib) 2.11.1 + @pdf-lib/fontkit 1.1.1 — PDF への書き込み（暗号化 PDF の復号に対応した pdf-lib のフォーク）
 - [harfbuzzjs](https://github.com/harfbuzz/harfbuzzjs) 0.4.13 — フォントのサブセット化
 
 ## ライセンス
